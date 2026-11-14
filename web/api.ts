@@ -73,8 +73,9 @@ export const api = {
     }),
   fetchReadingStats: (today: string) =>
     request(`/v1/reading-stats?today=${encodeURIComponent(today)}`),
-  addReadingNote: (data: { content: string; book_id?: number; reading_date?: string; from_who?: string }) =>
+  addReadingNote: (data: { content: string; book_id?: number; reading_date?: string; from_who?: string; reply_to?: number | null }) =>
     request('/v1/reading-notes', { method: 'POST', body: JSON.stringify(data) }),
+  fetchBookNotes: (bookId: number) => request(`/v1/books/${bookId}/notes`),
   deleteBook: (bookId: number) =>
     request(`/v1/books/${bookId}`, { method: 'DELETE' }),
   fetchBookToc: (bookId: number) =>

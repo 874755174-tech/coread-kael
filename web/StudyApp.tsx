@@ -107,6 +107,8 @@ interface Book {
     finished_at?: string | null;
 }
 interface Paragraph { idx: number; content: string; }
+// 读后感：挂在整本书上（不挂段落、不挂日期）的一条笔记，可以 reply_to 上一条
+interface BookNote { id: number; book_id: number; from_who: string; content: string; created_at: string; reply_to: number | null; }
 interface Comment { id: number; book_id: number; paragraph_idx: number; sel_end_para_idx: number | null; sel_start_idx: number | null; sel_end_idx: number | null; selected_text: string | null; from_who: string; content: string; created_at: string; reply_to: number | null; }
 interface ReadingStats {
     today: string;
@@ -195,6 +197,15 @@ function localDateString(date = new Date()): string {
 function localDay(time: number): string {
     const d = new Date(time);
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+// 读后感时间：库里存的是 UTC（datetime('now')），补成 ISO 再转本地
+function noteTime(createdAt?: string | null): string {
+    if (!createdAt) return '';
+    const iso = createdAt.includes('T') ? createdAt : createdAt.replace(' ', 'T') + 'Z';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return String(createdAt).slice(5, 16);
+    const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    return d.toDateString() === new Date().toDateString() ? hm : `${d.getMonth() + 1}-${String(d.getDate()).padStart(2, '0')} ${hm}`;
 }
 function fmtDuration(seconds: number): string {
     const s = Math.floor(seconds || 0);
@@ -508,6 +519,14 @@ const StudyApp: React.FC = () => {
     const [readerMenuPhase, setReaderMenuPhase] = useState<'closed' | 'anim' | 'open' | 'closing'>('closed');
     const [sheetPhase, setSheetPhase] = useState<'closed' | 'open' | 'closing'>('closed');
     const [allNotesPhase, setAllNotesPhase] = useState<'closed' | 'open' | 'closing'>('closed');
+    // 读后感（整本书那一层）：两个人都能先开口，回复走 reply_to
+    const [bookNotes, setBookNotes] = useState<BookNote[]>([]);
+    const [bookFinishedAt, setBookFinishedAt] = useState<string | null>(null);
+    const [notePhase, setNotePhase] = useState<'closed' | 'open' | 'closing'>('closed');
+    const [noteDraft, setNoteDraft] = useState('');
+    const [noteReplyTo, setNoteReplyTo] = useState<BookNote | null>(null);
+    const [noteSending, setNoteSending] = useState(false);
+    const [noteSeenId, setNoteSeenId] = useState(0);
     const [pageTurnMode, setPageTurnMode] = useState<'swipe' | 'tap'>(() => (localStorage.getItem('coread-page-turn-mode') as any) || 'tap');
     // 版式：自动（横屏够宽摊两页）｜单页｜双页
     const [pageLayout, setPageLayout] = useState<PageLayout>(() => { const v = lsGet('coread-page-layout'); return v === 'single' || v === 'double' ? v : 'auto'; });
@@ -993,6 +1012,58 @@ const StudyApp: React.FC = () => {
     };
     const closeStatsDrawer = () => { setStatsPhase('closing'); setTimeout(() => setStatsPhase(p => p === 'closing' ? 'closed' : p), 240); };
 
+    // ── 读后感：整本书那一层的笔记（谁先写都行，回复走 reply_to）──
+    const noteIsMine = (from: string) => {
+        const lower = String(from || '').toLowerCase();
+        return lower === 'human' || lower === humanName.toLowerCase();
+    };
+    const loadBookNotes = async (bookId: number): Promise<BookNote[]> => {
+        try {
+            const d = await api.fetchBookNotes(bookId);
+            const list: BookNote[] = Array.isArray(d.notes) ? d.notes : [];
+            setBookNotes(list);
+            setBookFinishedAt(d.finished_at || null);
+            const seen = parseInt(localStorage.getItem(`coread-note-seen-${bookId}`) || '0', 10);
+            setNoteSeenId(Number.isFinite(seen) ? seen : 0);
+            return list;
+        } catch { setBookNotes([]); setBookFinishedAt(null); return []; }
+    };
+    const markNotesSeen = (list: BookNote[]) => {
+        if (!activeBook) return;
+        const maxId = list.reduce((m, n) => Math.max(m, n.id), 0);
+        localStorage.setItem(`coread-note-seen-${activeBook.id}`, String(maxId));
+        setNoteSeenId(maxId);
+    };
+    const openNoteSheet = () => {
+        setNotePhase('open');
+        markNotesSeen(bookNotes);
+    };
+    const closeNoteSheet = () => {
+        setNotePhase('closing');
+        setNoteReplyTo(null);
+        setTimeout(() => setNotePhase(p => p === 'closing' ? 'closed' : p), 200);
+    };
+    const sendReadingNote = async () => {
+        const text = noteDraft.trim();
+        if (!text || !activeBook || noteSending) return;
+        setNoteSending(true);
+        try {
+            await api.addReadingNote({ content: text, book_id: activeBook.id, from_who: humanName, reply_to: noteReplyTo?.id ?? null });
+            setNoteDraft(''); setNoteReplyTo(null);
+            markNotesSeen(await loadBookNotes(activeBook.id));
+        } catch (e: any) { toast(`写读后感失败：${e.message}`); }
+        finally { setNoteSending(false); }
+    };
+    const markBookFinished = async () => {
+        if (!activeBook) return;
+        try {
+            const d = await api.markBookFinished(activeBook.id, localDateString());
+            setBookFinishedAt(d?.finished_at || localDateString());
+            loadBookNotes(activeBook.id).catch(() => {});
+        } catch (e: any) { toast(`标记失败：${e.message}`); }
+    };
+    const unseenNotes = bookNotes.filter(n => !noteIsMine(n.from_who) && n.id > noteSeenId).length;
+
     const openRequest = useRef(0);
     const openBook = async (book: Book) => {
         const requestId = ++openRequest.current;
@@ -1000,6 +1071,7 @@ const StudyApp: React.FC = () => {
         api.touchBookOpen(book.id).catch(() => {});
         setActiveBook(book); setMode('reading');
         setReadingLoading(true);
+        loadBookNotes(book.id).catch(() => {});
         setPage(1); setTotalPages(1); setPageBreaks([{ paraIndex: 0, offset: 0 }]); setPageFragments([]); setPaginateProgress(null);
         setParagraphs([]); setComments([]); setAllParas([]); setAllComments([]);
         currentParaIdxRef.current = null;
@@ -1891,6 +1963,7 @@ const StudyApp: React.FC = () => {
         ++openRequest.current;
         window.dispatchEvent(new Event('coread-pause'));
         setMode('shelf'); setActiveBook(null); setParagraphs([]); setComments([]);
+        setBookNotes([]); setBookFinishedAt(null); setNotePhase('closed'); setNoteDraft(''); setNoteReplyTo(null);
         setActiveComments([]); setSelRange(null); setFloatingBar(null); setShowToc(false); setTocChapters([]);
         setReturnPoint(null);
         loadBooks();
@@ -2544,6 +2617,149 @@ const StudyApp: React.FC = () => {
             {/* Bottom toolbar + ≡ floating menu + settings sheet */}
             {mode === 'reading' && (
                 <>
+                    {/* ── 读后感：只在书末出现，谁先开口都行 ── */}
+                    {!readingLoading && page + (spread ? 1 : 0) >= totalPages && notePhase === 'closed' && (
+                        <div style={{ position: 'absolute', left: 16, right: 16, bottom: 52, zIndex: 17, display: 'flex', justifyContent: 'center', pointerEvents: 'none' }}>
+                            <div onClick={(e) => { e.stopPropagation(); openNoteSheet(); }} style={{
+                                pointerEvents: 'auto', width: '100%', maxWidth: 460, position: 'relative', borderRadius: 20,
+                                background: readerNightMode ? 'rgba(38,38,38,0.72)' : 'linear-gradient(rgba(255,255,255,0.22), rgba(255,255,255,0) 45%), rgba(252,252,252,0.74)',
+                                backdropFilter: 'blur(32px) saturate(1.8)', WebkitBackdropFilter: 'blur(32px) saturate(1.8)' as any,
+                                border: `1px solid ${readerNightMode ? 'rgba(255,255,255,0.08)' : 'rgba(60,55,45,0.10)'}`,
+                                boxShadow: readerNightMode ? '0 8px 28px rgba(0,0,0,0.45)' : '0 8px 28px rgba(40,35,25,0.13), inset 0 1px 0 rgba(255,255,255,0.5)',
+                                padding: '12px 14px', cursor: 'pointer',
+                                animation: 'crRiseIn 220ms cubic-bezier(0.23, 1, 0.32, 1) both',
+                            }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                    <span style={{ fontSize: 13, fontWeight: 600, color: readerNightMode ? '#ddd' : INK }}>读后感</span>
+                                    <span style={{ fontSize: 11, color: readerNightMode ? '#888' : INK2 }}>
+                                        {bookNotes.length ? `${bookNotes.length} 条 · 整本` : '还没人开口 · 整本'}
+                                    </span>
+                                    <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: readerNightMode ? '#888' : INK2 }}>
+                                        {unseenNotes > 0 && <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#e0574c', display: 'inline-block' }} />}
+                                        打开
+                                    </span>
+                                </div>
+                                <div style={{ fontSize: 11, color: readerNightMode ? '#888' : '#a09883', marginTop: 3 }}>
+                                    不是某一句，是整本读完之后想说的那句。
+                                </div>
+                                <div style={{ marginTop: 7, display: 'flex', alignItems: 'center', gap: 10 }}>
+                                    {bookFinishedAt
+                                        ? <span style={{ fontSize: 11, color: readerNightMode ? '#777' : '#b3aa96' }}>已读完 · {bookFinishedAt}</span>
+                                        : <span onClick={(e) => { e.stopPropagation(); markBookFinished(); }} style={{ fontSize: 11, color: readerNightMode ? '#9a9a9a' : INK2, textDecoration: 'underline' }}>标记这本书读完</span>}
+                                    <span style={{ marginLeft: 'auto', fontSize: 11, color: readerNightMode ? '#888' : INK2 }}>写下来 →</span>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* 读后感面板：整本的对话，带回复链 */}
+                    {notePhase !== 'closed' && (
+                        <>
+                            <div onClick={(e) => { e.stopPropagation(); closeNoteSheet(); }} style={{
+                                position: 'absolute', inset: 0, zIndex: 44,
+                                background: readerNightMode ? 'rgba(0,0,0,0.5)' : 'rgba(30,26,20,0.20)',
+                            }} />
+                            <div onClick={(e) => e.stopPropagation()} className={notePhase === 'closing' ? 'cr-sheet-out' : 'cr-sheet-in'} style={{
+                                position: 'absolute', left: 0, right: 0, bottom: 0, zIndex: 45, maxHeight: '84vh',
+                                display: 'flex', flexDirection: 'column',
+                                borderTopLeftRadius: 26, borderTopRightRadius: 26,
+                                background: readerNightMode ? 'rgba(32,32,32,0.96)' : 'linear-gradient(rgba(255,255,255,0.55), rgba(255,255,255,0) 38%), rgba(252,251,247,0.97)',
+                                backdropFilter: 'blur(40px) saturate(1.8)', WebkitBackdropFilter: 'blur(40px) saturate(1.8)' as any,
+                                border: `1px solid ${readerNightMode ? 'rgba(255,255,255,0.08)' : 'rgba(60,55,45,0.10)'}`,
+                                borderBottom: 'none', padding: '16px 18px 20px',
+                                boxShadow: readerNightMode ? '0 -8px 40px rgba(0,0,0,0.5)' : '0 -8px 40px rgba(40,35,25,0.16), inset 0 1px 0 rgba(255,255,255,0.5)',
+                            }}>
+                                {(() => {
+                                    const nInk = readerNightMode ? '#ddd' : INK;
+                                    const nInk2 = readerNightMode ? '#888' : INK2;
+                                    const nLine = readerNightMode ? 'rgba(255,255,255,0.09)' : 'rgba(60,55,45,0.10)';
+                                    const roots = bookNotes.filter(n => n.reply_to == null);
+                                    const orphanReplies: BookNote[] = bookNotes.filter(n => n.reply_to != null && !bookNotes.some(p => p.id === n.reply_to));
+                                    const row = (n: BookNote, isReply: boolean) => {
+                                        const active = noteReplyTo?.id === n.id;
+                                        return (
+                                            <div key={n.id} onClick={() => setNoteReplyTo(active ? null : n)} style={{
+                                                display: 'flex', gap: 8, marginBottom: 12, cursor: 'pointer',
+                                                padding: '7px 9px', borderRadius: 12,
+                                                background: active ? (readerNightMode ? 'rgba(255,255,255,0.07)' : 'rgba(60,55,45,0.05)') : 'transparent',
+                                            }}>
+                                                <div style={{
+                                                    width: 22, height: 22, borderRadius: '50%', flex: 'none', fontSize: 11, fontWeight: 600,
+                                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                    background: noteIsMine(n.from_who) ? (readerNightMode ? 'rgba(255,255,255,0.14)' : 'rgba(60,55,45,0.10)') : (readerNightMode ? 'rgba(120,150,190,0.28)' : 'rgba(120,150,190,0.22)'),
+                                                    color: nInk,
+                                                }}>{displayName(n.from_who).charAt(0)}</div>
+                                                <div style={{ flex: 1, minWidth: 0 }}>
+                                                    <div style={{ fontSize: 11, color: nInk2, marginBottom: 2 }}>
+                                                        {displayName(n.from_who)} · {noteTime(n.created_at)}{isReply ? ' · 回复' : ''}
+                                                    </div>
+                                                    <div style={{ fontSize: 13, lineHeight: 1.68, color: nInk, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{n.content}</div>
+                                                </div>
+                                            </div>
+                                        );
+                                    };
+                                    return (
+                                        <>
+                                            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                                                <div style={{ flex: 1, minWidth: 0 }}>
+                                                    <div style={{ fontSize: 14, fontWeight: 700, color: nInk }}>{activeBook?.title || '这本书'} · 读后感</div>
+                                                    <div style={{ fontSize: 11, color: nInk2, marginTop: 2 }}>{humanName} 和 {aiName} · 只有你们能看</div>
+                                                </div>
+                                                <button onClick={closeNoteSheet} style={{ background: readerNightMode ? 'rgba(255,255,255,0.10)' : 'rgba(60,55,45,0.07)', border: 'none', borderRadius: 999, padding: '5px 14px', fontSize: 11, color: nInk2, cursor: 'pointer' }}>收起</button>
+                                            </div>
+                                            <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', marginTop: 14, minHeight: 64 }}>
+                                                {bookNotes.length === 0 && (
+                                                    <div style={{ fontSize: 13, color: nInk2, lineHeight: 1.7, padding: '10px 2px 18px' }}>
+                                                        还没有人说话。<br />不是某一句，是整本读完以后留在你身上的那个东西——想说什么，就从这里开始。
+                                                    </div>
+                                                )}
+                                                {roots.map(root => (
+                                                    <div key={root.id}>
+                                                        {row(root, false)}
+                                                        <div style={{ marginLeft: 11, paddingLeft: 13, borderLeft: `1px solid ${nLine}` }}>
+                                                            {bookNotes.filter(r => r.reply_to === root.id).map(r => row(r, true))}
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                                {orphanReplies.map(r => row(r, true))}
+                                            </div>
+                                            <div style={{ marginTop: 10, borderTop: `1px solid ${nLine}`, paddingTop: 10 }}>
+                                                {noteReplyTo && (
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: nInk2, marginBottom: 6 }}>
+                                                        <span style={{ borderLeft: `2px solid ${readerNightMode ? 'rgba(255,255,255,0.20)' : 'rgba(60,55,45,0.18)'}`, paddingLeft: 7 }}>
+                                                            回复 {displayName(noteReplyTo.from_who)}：{noteReplyTo.content.length > 26 ? noteReplyTo.content.slice(0, 26) + '…' : noteReplyTo.content}
+                                                        </span>
+                                                        <span onClick={() => setNoteReplyTo(null)} style={{ marginLeft: 'auto', cursor: 'pointer' }}>取消</span>
+                                                    </div>
+                                                )}
+                                                <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                                                    <textarea
+                                                        value={noteDraft}
+                                                        onChange={e => setNoteDraft(e.target.value)}
+                                                        placeholder={noteReplyTo ? `回 ${displayName(noteReplyTo.from_who)}…` : '这本书读完了，想说什么？'}
+                                                        rows={2}
+                                                        style={{
+                                                            flex: 1, resize: 'none', fontSize: 13, lineHeight: 1.6, padding: '9px 11px',
+                                                            borderRadius: 14, color: nInk, fontFamily: 'inherit',
+                                                            background: readerNightMode ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.65)',
+                                                            border: `1px solid ${nLine}`, outline: 'none',
+                                                        }}
+                                                    />
+                                                    <button onClick={sendReadingNote} disabled={!noteDraft.trim() || noteSending} style={{
+                                                        padding: '10px 16px', borderRadius: 14, fontSize: 13, fontWeight: 600, cursor: noteDraft.trim() ? 'pointer' : 'default',
+                                                        color: noteDraft.trim() ? '#fff' : nInk2,
+                                                        background: noteDraft.trim() ? (readerNightMode ? 'rgba(120,150,190,0.75)' : 'rgba(58,52,42,0.88)') : (readerNightMode ? 'rgba(255,255,255,0.07)' : 'rgba(60,55,45,0.07)'),
+                                                        border: 'none',
+                                                    }}>{noteSending ? '…' : '发'}</button>
+                                                </div>
+                                            </div>
+                                        </>
+                                    );
+                                })()}
+                            </div>
+                        </>
+                    )}
+
                     {/* 页码——常显底部居中 */}
                     <div style={{
                         position: 'absolute', bottom: 12, left: 0, right: 0,
@@ -2607,6 +2823,13 @@ const StudyApp: React.FC = () => {
                                             <div style={rowSt} onClick={() => { const v = !showSessionClock; setShowSessionClock(v); localStorage.setItem('coread-show-session-clock', String(v)); }}>
                                                 <span style={labelSt}>阅读钟</span>
                                                 <ReaderSwitch on={showSessionClock} night={readerNightMode} />
+                                            </div>
+                                            <div style={{ height: 0.5, background: readerNightMode ? 'rgba(255,255,255,0.12)' : 'hsla(40,10%,40%,0.16)', margin: '4px 12px' }} />
+                                            <div style={rowSt} onClick={() => { closeReaderMenu(); setTimeout(() => openNoteSheet(), 200); }}>
+                                                <span style={labelSt}>读后感<span style={{ fontSize: 11, color: mInk2, marginLeft: 6 }}>· {bookNotes.length ? `${bookNotes.length} 条` : '整本'}</span></span>
+                                                {unseenNotes > 0
+                                                    ? <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#e0574c', flexShrink: 0 }} />
+                                                    : <svg width="17" height="17" viewBox="0 0 17 17" fill="none" style={{ color: mIcon, flexShrink: 0 }}><path d="M3.4 3.2h10.2v8.2H6.6L3.4 14V3.2z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/><path d="M6 6h5M6 8.4h3" stroke="currentColor" strokeWidth="1.15" strokeLinecap="round"/></svg>}
                                             </div>
                                             <div style={{ height: 0.5, background: readerNightMode ? 'rgba(255,255,255,0.12)' : 'hsla(40,10%,40%,0.16)', margin: '4px 12px' }} />
                                             <div style={{ display: 'flex', justifyContent: 'space-around', padding: '6px 8px' }}>
