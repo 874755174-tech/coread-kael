@@ -482,8 +482,9 @@ const StudyApp: React.FC = () => {
     const batchFileRef = useRef<HTMLInputElement>(null);
     const [showBar, setShowBar] = useState(false);
     const [fabVisible, setFabVisible] = useState(false);
-    const [humanName, setHumanName] = useState(() => localStorage.getItem('coread-human-name') || 'human');
-    const [aiName, setAiName] = useState(() => localStorage.getItem('coread-ai-name') || 'AI');
+    // 默认署名不再叫 human / AI：老库里存着的默认值也一并升级，设置里改过的名字保持不动
+    const [humanName, setHumanName] = useState(() => { const v = localStorage.getItem('coread-human-name'); return v && v !== 'human' ? v : 'Lily'; });
+    const [aiName, setAiName] = useState(() => { const v = localStorage.getItem('coread-ai-name'); return v && v !== 'AI' ? v : '汐'; });
     const [showSettings, setShowSettings] = useState(false);
     const [showMenu, setShowMenu] = useState(false);
     const [menuPhase, setMenuPhase] = useState<'closed' | 'anim' | 'open' | 'closing'>('closed');
