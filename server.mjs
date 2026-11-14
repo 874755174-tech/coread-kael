@@ -92,10 +92,22 @@ const server = http.createServer(async (req, res) => {
     filePath = path.join(__dirname, 'public', 'index.html');
   }
   try {
-    const data = fs.readFileSync(filePath);
+    const stat = fs.statSync(filePath);
     const ext = path.extname(filePath).toLowerCase();
-    const headers = { 'Content-Type': MIME[ext] || 'application/octet-stream' };
-    if (ext === '.html') headers['Cache-Control'] = 'no-cache';
+    const etag = `"${stat.size.toString(16)}-${Math.round(stat.mtimeMs).toString(16)}"`;
+    const headers = { 'Content-Type': MIME[ext] || 'application/octet-stream', ETag: etag };
+    // 文件名带 hash 的构建产物可以永久缓存；index.html / service worker 必须每次校验。
+    if (urlPath.startsWith('/assets/')) headers['Cache-Control'] = 'public, max-age=31536000, immutable';
+    else if (ext === '.html' || urlPath === '/service-worker.js') headers['Cache-Control'] = 'no-cache';
+    else headers['Cache-Control'] = 'public, max-age=3600';
+    if (req.headers['if-none-match'] === etag) {
+      delete headers['Content-Type'];
+      res.writeHead(304, headers);
+      res.end();
+      return;
+    }
+    const data = fs.readFileSync(filePath);
+    headers['Content-Length'] = String(data.length);
     res.writeHead(200, headers);
     res.end(data);
   } catch {
