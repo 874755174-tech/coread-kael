@@ -413,7 +413,10 @@ const StudyApp: React.FC = () => {
     const c = themeColors(245, 25, 65);
 
     const [mode, setMode] = useState<'shelf' | 'reading'>('shelf');
-    const [books, setBooks] = useState<Book[]>([]);
+    // 书架先用上次的结果打底（本机缓存），再从网络刷新 —— 网络慢的时候不至于每次进来都空等
+    const [books, setBooks] = useState<Book[]>(() => {
+        try { const raw = localStorage.getItem('coread-books-cache'); const parsed = raw ? JSON.parse(raw) : null; return Array.isArray(parsed) ? parsed : []; } catch { return []; }
+    });
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
 
@@ -912,10 +915,17 @@ const StudyApp: React.FC = () => {
         return () => document.removeEventListener('selectionchange', handler);
     }, [mode]);
 
-    const loadBooks = async () => {
-        setLoading(true); setError('');
-        try { const d = await api.fetchBooks(); setBooks(d.books || []); }
-        catch (e: any) { setError(e.message); }
+    const loadBooks = async (opts: { silent?: boolean } = {}) => {
+        // 已经有书在屏上就别再整页「加载中」——静默刷新，回来了直接替换
+        const silent = opts.silent ?? books.length > 0;
+        if (!silent) { setLoading(true); setError(''); }
+        try {
+            const d = await api.fetchBooks();
+            const list = d.books || [];
+            setBooks(list);
+            try { localStorage.setItem('coread-books-cache', JSON.stringify(list)); } catch {}
+            if (silent) setError('');
+        } catch (e: any) { if (!silent) setError(e.message); }
         setLoading(false);
     };
 
@@ -1967,8 +1977,7 @@ const StudyApp: React.FC = () => {
         setBookNotes([]); setBookFinishedAt(null); setNotePhase('closed'); setNoteDraft(''); setNoteReplyTo(null);
         setActiveComments([]); setSelRange(null); setFloatingBar(null); setShowToc(false); setTocChapters([]);
         setReturnPoint(null);
-        loadBooks();
-        loadBooks();
+        loadBooks({ silent: true });
     };
 
     const commentsForPara = (idx: number) => comments.filter(x => {
@@ -2287,7 +2296,7 @@ const StudyApp: React.FC = () => {
                 ) : error ? (
                     <div style={{ textAlign: 'center', padding: '60px 20px' }}>
                         <div style={{ fontSize: 13, color: '#e88', marginBottom: 12 }}>{error}</div>
-                        <button onClick={loadBooks} style={{ background: 'none', border: '1px solid hsla(40,8%,16%,0.18)', borderRadius: 12, padding: '8px 20px', fontSize: 12, color: INK, cursor: 'pointer' }}>重试</button>
+                        <button onClick={() => loadBooks({ silent: false })} style={{ background: 'none', border: '1px solid hsla(40,8%,16%,0.18)', borderRadius: 12, padding: '8px 20px', fontSize: 12, color: INK, cursor: 'pointer' }}>重试</button>
                     </div>
                 ) : mode === 'shelf' ? (
                     <>
