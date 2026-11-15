@@ -44,6 +44,8 @@ export const api = {
     request(`/v1/books/${bookId}/comment`, { method: 'POST', body: JSON.stringify(data) }),
   deleteBookComment: (commentId: number) =>
     request(`/v1/books/comment/${commentId}`, { method: 'DELETE' }),
+  updateBookComment: (commentId: number, content: string) =>
+    request(`/v1/books/comment/${commentId}`, { method: 'PATCH', body: JSON.stringify({ content }) }),
   syncBookPagination: (bookId: number, data: any) =>
     request(`/v1/books/${bookId}/pagination`, { method: 'POST', body: JSON.stringify(data) }),
   updateBookProgress: (bookId: number, paragraphIdx: number, paragraphOffset = 0) =>
@@ -78,6 +80,8 @@ export const api = {
   fetchBookNotes: (bookId: number) => request(`/v1/books/${bookId}/notes`),
   deleteReadingNote: (noteId: number) =>
     request(`/v1/reading-notes/${noteId}`, { method: 'DELETE' }),
+  updateReadingNote: (noteId: number, content: string) =>
+    request(`/v1/reading-notes/${noteId}`, { method: 'PATCH', body: JSON.stringify({ content }) }),
   deleteBook: (bookId: number) =>
     request(`/v1/books/${bookId}`, { method: 'DELETE' }),
   fetchBookToc: (bookId: number) =>

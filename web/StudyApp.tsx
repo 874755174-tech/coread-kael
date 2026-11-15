@@ -108,8 +108,8 @@ interface Book {
 }
 interface Paragraph { idx: number; content: string; }
 // 读后感：挂在整本书上（不挂段落、不挂日期）的一条笔记，可以 reply_to 上一条
-interface BookNote { id: number; book_id: number; from_who: string; content: string; created_at: string; reply_to: number | null; }
-interface Comment { id: number; book_id: number; paragraph_idx: number; sel_end_para_idx: number | null; sel_start_idx: number | null; sel_end_idx: number | null; selected_text: string | null; from_who: string; content: string; created_at: string; reply_to: number | null; }
+interface BookNote { id: number; book_id: number; from_who: string; content: string; created_at: string; updated_at?: string | null; reply_to: number | null; }
+interface Comment { id: number; book_id: number; paragraph_idx: number; sel_end_para_idx: number | null; sel_start_idx: number | null; sel_end_idx: number | null; selected_text: string | null; from_who: string; content: string; created_at: string; updated_at?: string | null; reply_to: number | null; }
 interface ReadingStats {
     today: string;
     today_seconds: number;
@@ -530,6 +530,10 @@ const StudyApp: React.FC = () => {
     const [noteDraft, setNoteDraft] = useState('');
     const [noteReplyTo, setNoteReplyTo] = useState<BookNote | null>(null);
     const [noteDeleting, setNoteDeleting] = useState<number | null>(null);
+    const [noteEditing, setNoteEditing] = useState<number | null>(null);
+    const [noteEditText, setNoteEditText] = useState('');
+    const [commentEditing, setCommentEditing] = useState<number | null>(null);
+    const [commentEditText, setCommentEditText] = useState('');
     const [noteSending, setNoteSending] = useState(false);
     const [noteSeenId, setNoteSeenId] = useState(0);
     const [pageTurnMode, setPageTurnMode] = useState<'swipe' | 'tap'>(() => (localStorage.getItem('coread-page-turn-mode') as any) || 'tap');
@@ -1880,6 +1884,35 @@ const StudyApp: React.FC = () => {
         } catch (e: any) { toast(`删除失败: ${e.message}`); }
     };
 
+    const saveNoteEdit = async (n: BookNote) => {
+        const text = noteEditText.trim();
+        if (!text) { toast('不能改成空的'); return; }
+        if (text === n.content) { setNoteEditing(null); return; }
+        try {
+            await api.updateReadingNote(n.id, text);
+            const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+            setBookNotes(prev => prev.map(x => (x.id === n.id ? { ...x, content: text, updated_at: now } : x)));
+            setNoteEditing(null);
+            toast('已改');
+        } catch (e: any) { toast(`改不了: ${e.message}`); }
+    };
+
+    const saveCommentEdit = async (cmt: Comment) => {
+        const text = commentEditText.trim();
+        if (!text) { toast('不能改成空的'); return; }
+        if (text === cmt.content) { setCommentEditing(null); return; }
+        try {
+            await api.updateBookComment(cmt.id, text);
+            const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+            const apply = (list: Comment[]) => list.map(x => (x.id === cmt.id ? { ...x, content: text, updated_at: now } : x));
+            setComments(apply);
+            setAllComments(prev => { const u = apply(prev); cacheComments(cmt.book_id, u); return u; });
+            setActiveComments(apply);
+            setCommentEditing(null);
+            toast('已改');
+        } catch (e: any) { toast(`改不了: ${e.message}`); }
+    };
+
     const handleExport = () => {
         if (!activeBook) return;
         window.open(`${BASE}/v1/books/${activeBook.id}/export?format=epub`, '_blank');
@@ -2517,7 +2550,7 @@ const StudyApp: React.FC = () => {
                     boxShadow: readerNightMode ? '0 -4px 32px rgba(0,0,0,0.25)' : '0 -4px 32px rgba(0,0,0,0.08)',
                     zIndex: 20, maxHeight: '50vh', overflow: 'auto',
                 }} className="no-scrollbar cr-rise-in">
-                    <button onClick={() => setActiveComments([])} style={{ position: 'absolute', top: 10, right: 14, background: 'none', border: 'none', fontSize: 18, color: readerNightMode ? '#666' : '#ccc', cursor: 'pointer', lineHeight: 1, zIndex: 1 }}>×</button>
+                    <button onClick={() => { setActiveComments([]); setCommentEditing(null); }} style={{ position: 'absolute', top: 10, right: 14, background: 'none', border: 'none', fontSize: 18, color: readerNightMode ? '#666' : '#ccc', cursor: 'pointer', lineHeight: 1, zIndex: 1 }}>×</button>
                     {(() => {
                         const topLevel = activeComments.filter(ac => !ac.reply_to);
                         const replies = activeComments.filter(ac => ac.reply_to);
@@ -2530,16 +2563,35 @@ const StudyApp: React.FC = () => {
                                 <div key={ac.id} style={{ marginLeft: indent ? 28 : 0, marginBottom: 12, paddingBottom: 12, borderBottom: indent ? 'none' : `1px solid ${dividerColor}` }}>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
                                         <span style={{ fontSize: 12, fontWeight: 600, color: inkColor }}>{displayName(ac.from_who)}</span>
-                                        <span style={{ fontSize: 10, color: subColor }}>{ac.created_at?.slice(0, 16).replace('T', ' ')}</span>
+                                        <span style={{ fontSize: 10, color: subColor }}>{ac.created_at?.slice(0, 16).replace('T', ' ')}{ac.updated_at ? ' · 改过' : ''}</span>
                                     </div>
                                     {ac.selected_text && (
                                         <div style={{ fontSize: 12, color: subColor, fontStyle: 'italic', padding: '8px 12px', marginBottom: 10, background: readerNightMode ? 'rgba(255,255,255,.06)' : 'rgba(60,55,45,.05)', borderRadius: 12, lineHeight: 1.5 }}>
                                             {ac.selected_text}
                                         </div>
                                     )}
-                                    <div style={{ fontSize: 14, color: readerNightMode ? '#ddd' : 'hsl(40,8%,22%)', lineHeight: 1.7, marginBottom: 8 }}>{ac.content}</div>
+                                    {commentEditing === ac.id ? (
+                                        <div style={{ marginBottom: 8 }}>
+                                            <textarea value={commentEditText} onChange={(e) => setCommentEditText(e.target.value)} autoFocus
+                                                style={{
+                                                    width: '100%', boxSizing: 'border-box', minHeight: 84, resize: 'vertical',
+                                                    fontSize: 14, lineHeight: 1.7, color: readerNightMode ? '#ddd' : 'hsl(40,8%,22%)', fontFamily: 'inherit',
+                                                    background: readerNightMode ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.66)',
+                                                    border: `1px solid ${dividerColor}`, borderRadius: 10, padding: '9px 11px', outline: 'none',
+                                                }} />
+                                            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 14, marginTop: 7 }}>
+                                                <span onClick={() => setCommentEditing(null)} style={{ fontSize: 11, color: subColor, cursor: 'pointer' }}>取消</span>
+                                                <span onClick={() => saveCommentEdit(ac)} style={{ fontSize: 11, fontWeight: 600, color: inkColor, cursor: 'pointer' }}>保存</span>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <div style={{ fontSize: 14, color: readerNightMode ? '#ddd' : 'hsl(40,8%,22%)', lineHeight: 1.7, marginBottom: 8 }}>{ac.content}</div>
+                                    )}
                                     <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
                                         <button onClick={() => { replyPageRef.current = page; setReplyingTo(ac); setCommentingIdx(ac.paragraph_idx); setCommentText(''); }} style={{ background: 'none', border: `1px solid ${dividerColor}`, borderRadius: 10, padding: '4px 14px', fontSize: 11, color: inkColor, cursor: 'pointer' }}>回复</button>
+                                        {!isShen && (
+                                            <button onClick={() => { setCommentEditing(ac.id); setCommentEditText(ac.content); }} style={{ background: 'none', border: `1px solid ${dividerColor}`, borderRadius: 10, padding: '4px 14px', fontSize: 11, color: inkColor, cursor: 'pointer' }}>修改</button>
+                                        )}
                                         {!isShen && (
                                             <button onClick={() => handleDeleteComment(ac)} style={{ background: 'none', border: `1px solid ${readerNightMode ? 'rgba(255,100,100,.2)' : 'rgba(200,100,100,.2)'}`, borderRadius: 10, padding: '4px 14px', fontSize: 11, color: readerNightMode ? '#c88' : '#d88', cursor: 'pointer' }}>删除</button>
                                         )}
@@ -2716,7 +2768,7 @@ const StudyApp: React.FC = () => {
                                                 <div style={{ flex: 1, minWidth: 0 }}>
                                                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: nInk2, marginBottom: 2 }}>
                                                         <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                                            {displayName(n.from_who)} · {noteTime(n.created_at)}{isReply ? ' · 回复' : ''}
+                                                            {displayName(n.from_who)} · {noteTime(n.created_at)}{isReply ? ' · 回复' : ''}{n.updated_at ? ' · 改过' : ''}
                                                         </span>
                                                         {noteDeleting === n.id ? (
                                                             <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, flex: 'none' }}>
@@ -2727,11 +2779,31 @@ const StudyApp: React.FC = () => {
                                                                     style={{ fontSize: 11, color: nInk2, cursor: 'pointer' }}>取消</span>
                                                             </span>
                                                         ) : (
-                                                            <span onClick={(e) => { e.stopPropagation(); setNoteDeleting(n.id); }}
-                                                                style={{ marginLeft: 'auto', flex: 'none', fontSize: 11, color: nInk2, opacity: 0.4, cursor: 'pointer', paddingLeft: 8 }}>删</span>
+                                                            <span style={{ marginLeft: 'auto', flex: 'none', display: 'flex', gap: 10, paddingLeft: 8 }}>
+                                                                <span onClick={(e) => { e.stopPropagation(); setNoteEditing(n.id); setNoteEditText(n.content); setNoteDeleting(null); }}
+                                                                    style={{ fontSize: 11, color: nInk2, opacity: 0.4, cursor: 'pointer' }}>改</span>
+                                                                <span onClick={(e) => { e.stopPropagation(); setNoteDeleting(n.id); setNoteEditing(null); }}
+                                                                    style={{ fontSize: 11, color: nInk2, opacity: 0.4, cursor: 'pointer' }}>删</span>
+                                                            </span>
                                                         )}
                                                     </div>
-                                                    <div style={{ fontSize: 13, lineHeight: 1.68, color: nInk, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{n.content}</div>
+                                                    {noteEditing === n.id ? (
+                                                        <div onClick={(e) => e.stopPropagation()} style={{ cursor: 'default', paddingTop: 2 }}>
+                                                            <textarea value={noteEditText} onChange={(e) => setNoteEditText(e.target.value)} autoFocus
+                                                                style={{
+                                                                    width: '100%', boxSizing: 'border-box', minHeight: 88, resize: 'vertical',
+                                                                    fontSize: 13, lineHeight: 1.68, color: nInk, fontFamily: 'inherit',
+                                                                    background: readerNightMode ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.66)',
+                                                                    border: `1px solid ${nLine}`, borderRadius: 10, padding: '9px 11px', outline: 'none',
+                                                                }} />
+                                                            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 14, marginTop: 7 }}>
+                                                                <span onClick={() => setNoteEditing(null)} style={{ fontSize: 11, color: nInk2, cursor: 'pointer' }}>取消</span>
+                                                                <span onClick={() => saveNoteEdit(n)} style={{ fontSize: 11, fontWeight: 600, color: nInk, cursor: 'pointer' }}>保存</span>
+                                                            </div>
+                                                        </div>
+                                                    ) : (
+                                                        <div style={{ fontSize: 13, lineHeight: 1.68, color: nInk, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{n.content}</div>
+                                                    )}
                                                 </div>
                                             </div>
                                         );
