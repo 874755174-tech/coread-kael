@@ -529,6 +529,7 @@ const StudyApp: React.FC = () => {
     const [notePhase, setNotePhase] = useState<'closed' | 'open' | 'closing'>('closed');
     const [noteDraft, setNoteDraft] = useState('');
     const [noteReplyTo, setNoteReplyTo] = useState<BookNote | null>(null);
+    const [noteDeleting, setNoteDeleting] = useState<number | null>(null);
     const [noteSending, setNoteSending] = useState(false);
     const [noteSeenId, setNoteSeenId] = useState(0);
     const [pageTurnMode, setPageTurnMode] = useState<'swipe' | 'tap'>(() => (localStorage.getItem('coread-page-turn-mode') as any) || 'tap');
@@ -1052,6 +1053,7 @@ const StudyApp: React.FC = () => {
     const closeNoteSheet = () => {
         setNotePhase('closing');
         setNoteReplyTo(null);
+        setNoteDeleting(null);
         setTimeout(() => setNotePhase(p => p === 'closing' ? 'closed' : p), 200);
     };
     const sendReadingNote = async () => {
@@ -1863,6 +1865,18 @@ const StudyApp: React.FC = () => {
             const bookId = cmt.book_id;
             setAllComments(prev => { const u = prev.filter(x => x.id !== cmt.id); cacheComments(bookId, u); return u; });
             setActiveComments(prev => prev.filter(x => x.id !== cmt.id));
+        } catch (e: any) { toast(`删除失败: ${e.message}`); }
+    };
+
+    const handleDeleteNote = async (n: BookNote) => {
+        try {
+            await api.deleteReadingNote(n.id);
+            setBookNotes(prev => prev
+                .filter(x => x.id !== n.id)
+                .map(x => (x.reply_to === n.id ? { ...x, reply_to: null } : x)));
+            if (noteReplyTo?.id === n.id) setNoteReplyTo(null);
+            setNoteDeleting(null);
+            toast('已删除');
         } catch (e: any) { toast(`删除失败: ${e.message}`); }
     };
 
@@ -2700,8 +2714,22 @@ const StudyApp: React.FC = () => {
                                                     color: nInk,
                                                 }}>{displayName(n.from_who).charAt(0)}</div>
                                                 <div style={{ flex: 1, minWidth: 0 }}>
-                                                    <div style={{ fontSize: 11, color: nInk2, marginBottom: 2 }}>
-                                                        {displayName(n.from_who)} · {noteTime(n.created_at)}{isReply ? ' · 回复' : ''}
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: nInk2, marginBottom: 2 }}>
+                                                        <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                            {displayName(n.from_who)} · {noteTime(n.created_at)}{isReply ? ' · 回复' : ''}
+                                                        </span>
+                                                        {noteDeleting === n.id ? (
+                                                            <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, flex: 'none' }}>
+                                                                <span style={{ fontSize: 10, color: nInk2 }}>删掉？</span>
+                                                                <span onClick={(e) => { e.stopPropagation(); handleDeleteNote(n); }}
+                                                                    style={{ fontSize: 11, fontWeight: 600, color: readerNightMode ? '#c88' : '#c05555', cursor: 'pointer' }}>删除</span>
+                                                                <span onClick={(e) => { e.stopPropagation(); setNoteDeleting(null); }}
+                                                                    style={{ fontSize: 11, color: nInk2, cursor: 'pointer' }}>取消</span>
+                                                            </span>
+                                                        ) : (
+                                                            <span onClick={(e) => { e.stopPropagation(); setNoteDeleting(n.id); }}
+                                                                style={{ marginLeft: 'auto', flex: 'none', fontSize: 11, color: nInk2, opacity: 0.4, cursor: 'pointer', paddingLeft: 8 }}>删</span>
+                                                        )}
                                                     </div>
                                                     <div style={{ fontSize: 13, lineHeight: 1.68, color: nInk, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{n.content}</div>
                                                 </div>

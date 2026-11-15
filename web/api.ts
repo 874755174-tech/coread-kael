@@ -76,6 +76,8 @@ export const api = {
   addReadingNote: (data: { content: string; book_id?: number; reading_date?: string; from_who?: string; reply_to?: number | null }) =>
     request('/v1/reading-notes', { method: 'POST', body: JSON.stringify(data) }),
   fetchBookNotes: (bookId: number) => request(`/v1/books/${bookId}/notes`),
+  deleteReadingNote: (noteId: number) =>
+    request(`/v1/reading-notes/${noteId}`, { method: 'DELETE' }),
   deleteBook: (bookId: number) =>
     request(`/v1/books/${bookId}`, { method: 'DELETE' }),
   fetchBookToc: (bookId: number) =>
